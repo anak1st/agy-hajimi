@@ -4,13 +4,15 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import { handleMcpMessage } from '../src/server/mcp-entry.mjs';
-import { isAntigravityAppTarget, parseDevToolsPort } from '../src/server/cdp-bridge.mjs';
+import { isAntigravityAppTarget, parseDevToolsPort } from '../src/server/cdp-targets.mjs';
+import { createLsClient } from '../src/server/ls-client.mjs';
+import { assembleUiBundle } from '../src/server/ui-loader.mjs';
+import { formatDuration, formatTokens } from '../src/ui/formatters.js';
 import {
   buildTelemetrySnapshot,
   computeDurationSec,
@@ -192,7 +194,61 @@ test('BigInt nanosecond duration and telemetry aggregation compute accurate TPS 
   assert.equal(newChatSnap.tokens.totalTokens, 0);
 });
 
-test('UI overlay script parses as valid JavaScript', () => {
-  const jsSource = readFileSync(join(ROOT_DIR, 'src/ui/overlay.js'), 'utf8');
-  assert.doesNotThrow(() => new vm.Script(jsSource, { filename: 'overlay.js' }));
+test('UI module bundle assembles cleanly and formatter helpers work accurately', async () => {
+  const bundle = await assembleUiBundle(join(ROOT_DIR, 'src/ui'));
+  assert.doesNotThrow(() => new vm.Script(bundle, { filename: 'overlay-bundle.js' }));
+  assert.equal(formatTokens(15320), '15.3K');
+  assert.equal(formatTokens(2_450_000), '2.45M');
+  assert.equal(formatDuration(4.567), '4.57s');
+  assert.equal(formatDuration(75), '1m 15s');
+});
+
+test('LS client enforces 10-minute fixed quota cadence and preserves last valid quota on errors', async () => {
+  let callNum = 0;
+  let nowMs = 1_000_000;
+  const ls = createLsClient({
+    nowFn: () => nowMs,
+    remoteWindowRpc: async () => {
+      callNum += 1;
+      if (callNum === 1) {
+        return {
+          response: {
+            groups: [
+              {
+                displayName: 'Gemini Models',
+                buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.85 }],
+              },
+            ],
+          },
+        };
+      }
+      if (callNum === 2) {
+        throw new Error('Quota service temporary timeout');
+      }
+      return { response: { groups: [] } };
+    },
+  });
+  const target = { isRemote: true, wsUrl: 'ws://127.0.0.1:9999/devtools/page/1' };
+
+  const first = await ls.getQuotaSummary({ remoteTarget: target });
+  assert.equal(first.response.groups.length, 1);
+  assert.equal(callNum, 1);
+
+  // 10 分钟窗口内即使传入外部条件（如 force: true）也绝不重复查询配额
+  nowMs += 9 * 60 * 1000;
+  const cachedWithin10m = await ls.getQuotaSummary({ force: true, remoteTarget: target });
+  assert.equal(cachedWithin10m.response.groups[0].buckets[0].remainingFraction, 0.85);
+  assert.equal(callNum, 1);
+
+  // 满 10 分钟触发第 2 次查询，遇到异常时仍保留上一次有效配额
+  nowMs += 60 * 1000;
+  const afterErr = await ls.getQuotaSummary({ remoteTarget: target });
+  assert.equal(afterErr.response.groups[0].buckets[0].remainingFraction, 0.85);
+  assert.equal(callNum, 2);
+
+  // 再次满 10 分钟触发第 3 次查询，返回空组时同样保留上一次有效配额
+  nowMs += 10 * 60 * 1000;
+  const afterEmpty = await ls.getQuotaSummary({ remoteTarget: target });
+  assert.equal(afterEmpty.response.groups[0].buckets[0].remainingFraction, 0.85);
+  assert.equal(callNum, 3);
 });

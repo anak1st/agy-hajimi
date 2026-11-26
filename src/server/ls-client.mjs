@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const SERVICE_PREFIX = '/exa.language_server_pb.LanguageServerService/';
+const QUOTA_CACHE_TTL_MS = 10 * 60 * 1000; // 配额固定每 10 分钟查询一次，不受外部条件影响
 
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -134,10 +135,21 @@ function postLoopbackJson(urlStr, csrfToken, bodyObj, timeoutMs = 5000) {
   });
 }
 
-export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null } = {}) {
+export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null, nowFn = Date.now } = {}) {
   let cachedEndpoint = null;
   let userStatusCache = { ts: 0, data: null };
-  let quotaCache = { ts: 0, data: null };
+  const lastValidUserStatus = new Map();
+  const quotaStateByScope = new Map();
+
+  function getScopeKey(remoteTarget) {
+    if (!remoteTarget?.isRemote) return 'local';
+    return String(remoteTarget.wsUrl || remoteTarget.endpointLabel || 'remote');
+  }
+
+  function hasQuotaGroups(data) {
+    const payload = data?.response !== undefined ? data.response : data;
+    return Array.isArray(payload?.groups) && payload.groups.length > 0;
+  }
 
   function resolveLocalEndpoint({ force = false } = {}) {
     if (!force && cachedEndpoint && (!cachedEndpoint.pid || isPidAlive(cachedEndpoint.pid))) {
@@ -213,27 +225,58 @@ export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null } =
   }
 
   async function getUserStatus({ force = false, remoteTarget = null } = {}) {
-    const now = Date.now();
+    const now = nowFn();
+    const scopeKey = getScopeKey(remoteTarget);
     if (!remoteTarget?.isRemote && !force && userStatusCache.data && now - userStatusCache.ts < 30_000) {
       return userStatusCache.data;
     }
-    const data = await callRpc('GetUserStatus', {}, { timeoutMs: 3000, remoteTarget });
-    if (!remoteTarget?.isRemote) {
-      userStatusCache = { ts: now, data };
+    try {
+      const data = await callRpc('GetUserStatus', {}, { timeoutMs: 3000, remoteTarget });
+      if (data && typeof data === 'object' && data.userStatus) {
+        lastValidUserStatus.set(scopeKey, data);
+        if (!remoteTarget?.isRemote) {
+          userStatusCache = { ts: now, data };
+        }
+        return data;
+      }
+      return lastValidUserStatus.get(scopeKey) || data;
+    } catch (err) {
+      if (lastValidUserStatus.has(scopeKey)) {
+        return lastValidUserStatus.get(scopeKey);
+      }
+      throw err;
     }
-    return data;
   }
 
-  async function getQuotaSummary({ force = false, remoteTarget = null } = {}) {
-    const now = Date.now();
-    if (!remoteTarget?.isRemote && !force && quotaCache.data && now - quotaCache.ts < 10_000) {
-      return quotaCache.data;
+  async function getQuotaSummary({ remoteTarget = null } = {}) {
+    const now = nowFn();
+    const scopeKey = getScopeKey(remoteTarget);
+    const prev = quotaStateByScope.get(scopeKey) || { lastAttemptTs: 0, data: null };
+
+    // 固定 10 分钟内直接返回已缓存的配额（不受切会话、生成中或手动强制刷新等外部条件影响）
+    if (prev.lastAttemptTs > 0 && now - prev.lastAttemptTs < QUOTA_CACHE_TTL_MS && prev.data) {
+      return prev.data;
     }
-    const data = await callRpc('RetrieveUserQuotaSummary', { forceRefresh: force }, { timeoutMs: 5000, remoteTarget });
-    if (!remoteTarget?.isRemote) {
-      quotaCache = { ts: now, data };
+
+    try {
+      const data = await callRpc('RetrieveUserQuotaSummary', { forceRefresh: false }, { timeoutMs: 5000, remoteTarget });
+      if (hasQuotaGroups(data)) {
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data });
+        return data;
+      }
+      if (prev.data) {
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: prev.data });
+        return prev.data;
+      }
+      quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: null });
+      return data;
+    } catch (err) {
+      if (prev.data) {
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: prev.data });
+        return prev.data;
+      }
+      throw err;
     }
-    return data;
   }
 
   function getLocalHubPorts() {

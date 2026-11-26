@@ -31,6 +31,7 @@ for arg in "$@"; do
 done
 
 echo "[info] Installing agy-hajimi plugin to: $PLUGIN_DEST"
+rm -rf "$PLUGIN_DEST/src"
 mkdir -p "$PLUGIN_DEST/assets" "$PLUGIN_DEST/src/server" "$PLUGIN_DEST/src/ui"
 
 cp "$SCRIPT_DIR/plugin.json" "$PLUGIN_DEST/plugin.json"

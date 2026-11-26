@@ -18,7 +18,8 @@
   - **空闲状态**：每 **10 分钟**拉取一次；
   - **切换会话 ID**：路由变更立即清空旧展示并拉取一次；
   - **对话生成中**：自动切为每 **10 秒**拉取一次，生成完成后自动回落至 10 分钟；
-  - **手动刷新**：支持点击卡片右上角刷新按钮或右键顶栏胶囊随时立即刷新。
+  - **模型配额独立节流**：`Model Quotas` 固定每 **10 分钟**查询一次（不随切换会话、生成中或手动强制刷新频繁请求），且单次查询失败或返回空数据时保留上一次有效配额展示；
+  - **手动刷新**：支持点击卡片右上角刷新按钮或右键顶栏胶囊随时立即刷新会话遥测。
 - **主题自适应**：通过双 Shadow DOM 继承宿主 `--background`、`--card`、`--foreground`、`--border`、`--primary` 变量与 `color-mix()`，零延迟跟随浅色/深色主题。
 - **零端口 CDP 通信**：采用 `Runtime.addBinding` 双向通道，无需额外开放本地 HTTP 服务端口。
 
@@ -69,12 +70,23 @@ agy-hajimi/
 ├── src/
 │   ├── server/
 │   │   ├── mcp-entry.mjs   # 0 工具 MCP Stdio 宿主与子进程看门狗
-│   │   ├── daemon.mjs      # 后台守护进程主入口
-│   │   ├── ls-client.mjs   # Language Server 自动发现与 Connect-RPC 客户端
-│   │   ├── metrics.mjs     # 遥测聚合（BigInt 纳秒耗时、Gemini 配额过滤等）
-│   │   └── cdp-bridge.mjs  # CDP 自动重连、Runtime.addBinding 双向通道与注入器
+│   │   ├── daemon.mjs      # 后台守护进程主入口与会话轨迹缓存
+│   │   ├── ls-client.mjs   # Language Server 自动发现、Connect-RPC 与固定 10m 配额节流
+│   │   ├── time-math.mjs   # BigInt 纳秒级耗时与数值安全解析
+│   │   ├── quota.mjs       # 模型名称映射与 Gemini 系列配额归一化
+│   │   ├── metrics.mjs     # 单会话遥测汇总聚合引擎
+│   │   ├── cdp-session.mjs # 单窗口 WebSocket CDP 命令传输封装
+│   │   ├── cdp-targets.mjs # CDP 端口发现、主窗口白名单筛选与本地/SSH 识别
+│   │   ├── cdp-bridge.mjs  # CDP 注入调度与 Runtime.addBinding 双向通道
+│   │   └── ui-loader.mjs   # 前端分模块 ES 脚本零依赖组装器
 │   └── ui/
-│       ├── overlay.js      # 双 Shadow Host 前端逻辑与懒刷新调度
+│       ├── rpc-client.js   # CDP Binding 异步 RPC 客户端
+│       ├── formatters.js   # DOM 构建、数值格式化与对话路由识别
+│       ├── theme.js        # Shadow DOM 样式加载与亮暗主题极性同步
+│       ├── dock.js         # 顶栏流式停靠、自适应间距高度与浮层定位
+│       ├── components.js   # 胶囊与悬浮卡片各数据区块渲染组件
+│       ├── scheduler.js    # 自适应懒刷新调度（10m / 10s / 路由隔离）
+│       ├── overlay.js      # 前端双 Shadow Host 组装入口
 │       └── overlay.css     # 宿主变量自适应样式表
 └── tests/
     └── plugin.test.mjs     # Node 内置单元测试套件

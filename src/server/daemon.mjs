@@ -5,29 +5,16 @@
  * 并在收到 `SHUTDOWN_DISPOSE` 或退出信号时主动卸载所有窗口内的注入节点。
  */
 
-import { readFile } from 'node:fs/promises';
-import { statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCdpBridge } from './cdp-bridge.mjs';
 import { createLsClient } from './ls-client.mjs';
 import { readPluginVersion } from './mcp-entry.mjs';
 import { buildTelemetrySnapshot } from './metrics.mjs';
+import { getUiBundleVersion, loadUiAssets } from './ui-loader.mjs';
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const UI_DIR = join(dirname(SERVER_DIR), 'ui');
-const CSS_PATH = join(UI_DIR, 'overlay.css');
-const JS_PATH = join(UI_DIR, 'overlay.js');
-
-function computeBundleVersion() {
-  try {
-    const cssStat = statSync(CSS_PATH);
-    const jsStat = statSync(JS_PATH);
-    return `${Math.trunc(cssStat.mtimeMs)}-${Math.trunc(jsStat.mtimeMs)}`;
-  } catch {
-    return '1';
-  }
-}
 
 export function startDaemon() {
   const pluginVersion = readPluginVersion();
@@ -39,6 +26,9 @@ export function startDaemon() {
       bridge.remoteWindowRpc(session, method, body, timeoutMs),
   });
 
+  const lastValidSummaries = new Map();
+  const lastValidTrajectories = new Map();
+
   async function handleBridgeRequest(session, action, params = {}) {
     if (action !== 'telemetry' && action !== 'refresh') {
       throw new Error(`Unknown action: ${action}`);
@@ -46,12 +36,19 @@ export function startDaemon() {
 
     const force = action === 'refresh' || params?.force === true;
     const remoteTarget = session?.isRemote ? session : null;
+    const scopeKey = remoteTarget ? String(remoteTarget.wsUrl || remoteTarget.endpointLabel || 'remote') : 'local';
 
-    const [summariesRes, userStatusRes, quotaRes] = await Promise.all([
+    let [summariesRes, userStatusRes, quotaRes] = await Promise.all([
       lsClient.callRpc('GetAllCascadeTrajectories', {}, { timeoutMs: 4000, remoteTarget }).catch(() => null),
       lsClient.getUserStatus({ force, remoteTarget }).catch(() => null),
-      lsClient.getQuotaSummary({ force, remoteTarget }).catch(() => null),
+      lsClient.getQuotaSummary({ remoteTarget }).catch(() => null),
     ]);
+
+    if (summariesRes?.trajectorySummaries && Object.keys(summariesRes.trajectorySummaries).length > 0) {
+      lastValidSummaries.set(scopeKey, summariesRes);
+    } else if (lastValidSummaries.has(scopeKey)) {
+      summariesRes = lastValidSummaries.get(scopeKey);
+    }
 
     const selectedCascadeId = String(params?.selectedCascadeId || '').trim();
     const hostRouteCascadeId = String(params?.hostRouteCascadeId || '').trim();
@@ -70,9 +67,19 @@ export function startDaemon() {
     let trajectoryRes = null;
     const activeCascadeId = preSummary.activeConversation?.cascadeId || selectedCascadeId || hostRouteCascadeId;
     if (activeCascadeId) {
+      const trajKey = `${scopeKey}:${activeCascadeId.toLowerCase()}`;
       trajectoryRes = await lsClient
         .callRpc('GetCascadeTrajectory', { cascadeId: activeCascadeId }, { timeoutMs: 5000, remoteTarget })
         .catch(() => null);
+      if (trajectoryRes && (trajectoryRes.trajectory || Array.isArray(trajectoryRes.steps))) {
+        if (lastValidTrajectories.size >= 30 && !lastValidTrajectories.has(trajKey)) {
+          const oldestKey = lastValidTrajectories.keys().next().value;
+          if (oldestKey !== undefined) lastValidTrajectories.delete(oldestKey);
+        }
+        lastValidTrajectories.set(trajKey, trajectoryRes);
+      } else if (lastValidTrajectories.has(trajKey)) {
+        trajectoryRes = lastValidTrajectories.get(trajKey);
+      }
     }
 
     return buildTelemetrySnapshot({
@@ -89,14 +96,8 @@ export function startDaemon() {
   }
 
   bridge = createCdpBridge({
-    loadAssets: async () => {
-      const [css, js] = await Promise.all([
-        readFile(CSS_PATH, 'utf8'),
-        readFile(JS_PATH, 'utf8'),
-      ]);
-      return { css, js };
-    },
-    getBundleVersion: computeBundleVersion,
+    loadAssets: () => loadUiAssets(UI_DIR),
+    getBundleVersion: () => getUiBundleVersion(UI_DIR),
     getLocalHubInfo: () => lsClient.getLocalHubPorts(),
     onRequest: handleBridgeRequest,
   });
@@ -118,28 +119,23 @@ export function startDaemon() {
     }
   }
 
-  let stdinBuf = '';
-  let sawDispose = false;
   process.stdin.setEncoding('utf8');
+  let stdinBuf = '';
   process.stdin.on('data', (chunk) => {
-    stdinBuf += String(chunk || '');
+    stdinBuf += chunk;
     if (stdinBuf.includes('SHUTDOWN_DISPOSE')) {
-      sawDispose = true;
       void shutdown({ disposeWindows: true, exitCode: 0 });
-    } else if (stdinBuf.length > 4096) {
-      stdinBuf = stdinBuf.slice(-1024);
     }
   });
-  process.stdin.on('end', () => void shutdown({ disposeWindows: sawDispose, exitCode: 0 }));
-  process.stdin.on('close', () => void shutdown({ disposeWindows: sawDispose, exitCode: 0 }));
-  process.on('SIGTERM', () => void shutdown({ disposeWindows: true, exitCode: 0 }));
-  process.on('SIGINT', () => void shutdown({ disposeWindows: true, exitCode: 0 }));
-  process.stdin.resume();
+  process.stdin.on('end', () => {
+    void shutdown({ disposeWindows: true, exitCode: 0 });
+  });
 
-  return bridge;
+  process.on('SIGINT', () => void shutdown({ disposeWindows: true, exitCode: 0 }));
+  process.on('SIGTERM', () => void shutdown({ disposeWindows: true, exitCode: 0 }));
 }
 
-const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
-if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
+const isEntry = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isEntry) {
   startDaemon();
 }
