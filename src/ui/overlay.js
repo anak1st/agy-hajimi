@@ -12,7 +12,7 @@
   const CAPSULE_ID = 'ag-ctx-hud-capsule';
   const PORTAL_ID = 'ag-ctx-hud-portal';
   const SVG_NS = 'http://www.w3.org/2000/svg';
-  const RING_RADIUS = 5.2;
+  const RING_RADIUS = 5.8;
   const RING_CIRCUMFERENCE = +(2 * Math.PI * RING_RADIUS).toFixed(2);
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const IDLE_POLL_MS = 10 * 60 * 1000; // 空闲时 10 分钟拉取一次
@@ -226,19 +226,19 @@
 
   // --- 5. 构建顶栏胶囊 DOM（圆形进度条 + 上下文百分比） ---
   const ringSvg = document.createElementNS(SVG_NS, 'svg');
-  ringSvg.setAttribute('viewBox', '0 0 14 14');
+  ringSvg.setAttribute('viewBox', '0 0 16 16');
   ringSvg.setAttribute('class', 'hud-ring-svg');
   ringSvg.setAttribute('aria-hidden', 'true');
 
   const ringTrack = document.createElementNS(SVG_NS, 'circle');
-  ringTrack.setAttribute('cx', '7');
-  ringTrack.setAttribute('cy', '7');
+  ringTrack.setAttribute('cx', '8');
+  ringTrack.setAttribute('cy', '8');
   ringTrack.setAttribute('r', String(RING_RADIUS));
   ringTrack.setAttribute('class', 'hud-ring-track');
 
   const ringFill = document.createElementNS(SVG_NS, 'circle');
-  ringFill.setAttribute('cx', '7');
-  ringFill.setAttribute('cy', '7');
+  ringFill.setAttribute('cx', '8');
+  ringFill.setAttribute('cy', '8');
   ringFill.setAttribute('r', String(RING_RADIUS));
   ringFill.setAttribute('class', 'hud-ring-fill is-empty');
   ringFill.setAttribute('stroke-dasharray', String(RING_CIRCUMFERENCE));
@@ -416,40 +416,65 @@
   );
   portalShadow.appendChild(popoverEl);
 
-  // --- 7. 顶栏停靠与浮层防溢出定位 ---
-  function findDockTarget() {
-    const titlebar = document.querySelector('[class*="@container/titlebar"]');
-    if (titlebar) {
-      const tbRect = titlebar.getBoundingClientRect();
-      if (tbRect.width > 0 && tbRect.height > 0) {
-        const rightGroup = titlebar.querySelector(':scope > div.shrink-0') || titlebar.lastElementChild;
-        if (rightGroup && rightGroup !== titlebar.firstElementChild) {
-          return { kind: 'flow', container: rightGroup };
+  // --- 7. 顶栏停靠与浮层防溢出定位（基于右上角按钮组真实包围盒留出明确间距） ---
+  function measureTopRightCluster(vw) {
+    const boxes = [];
+    const seen = new Set();
+    const candidates = document.querySelectorAll(
+      '[data-testid="toggle-aux-sidebar"], div.absolute.right-0.top-0 button, div.absolute.right-0.top-0 [role="button"], [class*="@container/titlebar"] button, [class*="@container/titlebar"] a, [class*="@container/titlebar"] [role="button"], header button, button, a, [role="button"]'
+    );
+    for (const el of candidates) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      if (capsuleHost.contains(el) || portalHost.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (!r || r.width < 12 || r.height < 12 || r.width > 320) continue;
+      if (r.top < 0 || r.top > 40 || r.bottom > 56) continue;
+      if (r.right <= vw * 0.45 || r.right > vw + 2) continue;
+      const st = getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+      boxes.push({ left: r.left, top: r.top, right: r.right, height: r.height });
+    }
+
+    if (boxes.length === 0) return null;
+    boxes.sort((a, b) => b.right - a.right);
+
+    // 从最右侧可见按钮向左合并连续按钮组（间距 <= 56px 视为同一组，跨过中间拖拽留白即停止）
+    let clusterLeft = boxes[0].left;
+    const anchorTop = boxes[0].top;
+    const anchorHeight = boxes[0].height;
+    let detectedGap = null;
+    for (let i = 1; i < boxes.length; i += 1) {
+      const b = boxes[i];
+      if (b.right >= clusterLeft - 56) {
+        const gap = Math.round(clusterLeft - b.right);
+        if (gap >= 2 && gap <= 24 && (detectedGap === null || gap < detectedGap)) {
+          detectedGap = gap;
         }
-        return { kind: 'flow', container: titlebar };
+        if (b.left < clusterLeft) clusterLeft = b.left;
+      } else {
+        break;
       }
     }
-    return null;
+    const clusterGap = detectedGap ?? 6;
+    return { clusterLeft, anchorTop, anchorHeight, clusterGap };
   }
 
   function updateFixedPosition() {
-    if (capsuleHost.getAttribute('data-dock') !== 'fixed') {
-      capsuleHost.style.top = '';
-      capsuleHost.style.right = '';
-      return;
-    }
     const vw = Number(window.innerWidth || 1280);
-    let rightOffset = 12;
-    const auxBtn = document.querySelector('[data-testid="toggle-aux-sidebar"]');
-    if (auxBtn) {
-      const anchor = auxBtn.closest('div.absolute.right-0.top-0') || auxBtn;
-      const r = anchor.getBoundingClientRect();
-      if (r.width > 0 && r.left > 0 && r.left < vw) {
-        rightOffset = Math.max(12, Math.ceil(vw - r.left + 8));
-      }
+    const cluster = measureTopRightCluster(vw);
+    let topOffset = 8;
+    let rightOffset = 18;
+    let btnHeight = 28;
+    if (cluster) {
+      btnHeight = Math.max(24, Math.min(34, Math.round(cluster.anchorHeight || 28)));
+      topOffset = Math.max(2, Math.round(cluster.anchorTop + (cluster.anchorHeight - btnHeight) / 2));
+      rightOffset = Math.max(12, Math.ceil(vw - cluster.clusterLeft + cluster.clusterGap));
     }
-    capsuleHost.style.top = '7px';
+    capsuleHost.style.top = `${topOffset}px`;
     capsuleHost.style.right = `${rightOffset}px`;
+    capsuleHost.style.height = `${btnHeight}px`;
+    capsuleBtn.style.height = `${btnHeight}px`;
   }
 
   function ensureDocked() {
@@ -467,26 +492,13 @@
       setPopoverOpen(false);
     }
 
-    const dock = findDockTarget();
-    if (dock) {
-      if (capsuleHost.parentElement !== dock.container || dock.container.firstChild !== capsuleHost) {
-        if (dock.container.firstChild) {
-          dock.container.insertBefore(capsuleHost, dock.container.firstChild);
-        } else {
-          dock.container.appendChild(capsuleHost);
-        }
-      }
-      if (capsuleHost.getAttribute('data-dock') !== 'flow') {
-        capsuleHost.setAttribute('data-dock', 'flow');
-      }
-      updateFixedPosition();
-    } else {
-      if (capsuleHost.parentElement !== body) {
-        body.appendChild(capsuleHost);
-      }
-      if (capsuleHost.getAttribute('data-dock') !== 'fixed') {
-        capsuleHost.setAttribute('data-dock', 'fixed');
-      }
+    if (capsuleHost.parentElement !== body) {
+      body.appendChild(capsuleHost);
+    }
+    if (capsuleHost.getAttribute('data-dock') !== 'fixed') {
+      capsuleHost.setAttribute('data-dock', 'fixed');
+    }
+    if (shouldShow) {
       updateFixedPosition();
     }
     if (popoverOpen) positionPopover();
@@ -869,6 +881,20 @@
 
   let themeObserver = null;
   let domObserver = null;
+  let resizeObserver = null;
+  let dockRaf = 0;
+
+  function scheduleDockSync() {
+    if (disposed || dockRaf) return;
+    dockRaf = requestAnimationFrame(() => {
+      dockRaf = 0;
+      if (!disposed) {
+        onRouteCheck();
+        ensureDocked();
+      }
+    });
+  }
+
   try {
     themeObserver = new MutationObserver(() => syncThemeScheme());
     themeObserver.observe(document.documentElement, {
@@ -876,11 +902,12 @@
       attributeFilter: ['class', 'style', 'data-theme'],
     });
     if (document.body) {
-      domObserver = new MutationObserver(() => {
-        onRouteCheck();
-        ensureDocked();
-      });
+      domObserver = new MutationObserver(() => scheduleDockSync());
       domObserver.observe(document.body, { childList: true, subtree: true });
+      if (typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(() => scheduleDockSync());
+        resizeObserver.observe(document.body);
+      }
     }
   } catch {}
 
@@ -914,8 +941,10 @@
         p.reject(new Error('Overlay disposed'));
       }
       pendingRpcs.clear();
+      if (dockRaf) cancelAnimationFrame(dockRaf);
       themeObserver?.disconnect();
       domObserver?.disconnect();
+      resizeObserver?.disconnect();
       document.removeEventListener('mousedown', onDocMouseDown, true);
       document.removeEventListener('keydown', onDocKeyDown);
       document.removeEventListener('submit', onDocSubmit, true);
