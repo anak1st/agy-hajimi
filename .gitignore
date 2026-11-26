@@ -1,0 +1,14 @@
+# 本地临时研究目录与参考源码
+temp/
+
+# 系统与编辑器文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Node 依赖与运行日志
+node_modules/
+*.log
+npm-debug.log*
+.env

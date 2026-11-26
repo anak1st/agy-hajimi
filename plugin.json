@@ -1,0 +1,7 @@
+{
+  "name": "agy-hajimi",
+  "displayName": "agy-hajimi",
+  "version": "1.0.0",
+  "description": "Top-right titlebar context ring capsule and floating telemetry card for Antigravity App.",
+  "logo": "assets/logo.svg"
+}

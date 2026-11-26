@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "hud": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/src/server/mcp-entry.mjs"
+      ]
+    }
+  }
+}
