@@ -231,6 +231,40 @@
   letter-spacing: -0.01em;
 }
 
+.hud-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hud-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 90ms ease, color 90ms ease;
+}
+
+.hud-tab-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.hud-tab-btn.is-active {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
 .hud-updated-at {
   font-size: 11px;
   font-weight: 400;
@@ -291,7 +325,11 @@
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.hud-body[hidden] {
+  display: none !important;
 }
 
 .hud-body::-webkit-scrollbar {
@@ -307,8 +345,8 @@
 .hud-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--border-hairline);
   border-radius: 8px;
   background: transparent;
@@ -326,6 +364,55 @@
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-primary);
+}
+
+.hud-card-aside {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 195px;
+}
+
+.hud-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.hud-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.hud-model-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-model-stats {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.hud-model-empty {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 /* 上下文窗口卡片（简洁：已用 / 总量 + 进度条） */
@@ -364,6 +451,7 @@
   position: relative;
   width: 100%;
   height: 6px;
+  margin: 1px 0;
   border-radius: 999px;
   background: var(--surface-track);
   overflow: hidden;
@@ -404,14 +492,14 @@
 .hud-matrix {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .hud-metric-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 12px;
   border: 1px solid var(--border-hairline);
   border-radius: 8px;
   background: transparent;
@@ -421,7 +509,7 @@
 .hud-cell-label {
   font-size: 11px;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 
@@ -439,7 +527,7 @@
 .hud-cell-sub {
   font-size: 11px;
   font-weight: 400;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -456,7 +544,7 @@
 .hud-token-col {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -468,7 +556,7 @@
 .hud-token-col-label {
   font-size: 11px;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 
@@ -484,24 +572,29 @@
 .hud-quota-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .hud-quota-pool {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .hud-quota-pool + .hud-quota-pool {
-  padding-top: 8px;
+  padding-top: 12px;
   border-top: 1px solid var(--border-hairline);
 }
 
 .hud-quota-row {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
+}
+
+.hud-quota-row + .hud-quota-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-hairline);
 }
 
 .hud-quota-row-head {
@@ -509,7 +602,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .hud-quota-win {
@@ -530,7 +623,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .hud-quota-est {

@@ -71,7 +71,7 @@ export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
     return {
       projectedEndPct: 100,
       paceText: 'Limit reached',
-      estPctText: 'Est. 100%',
+      estPctText: 'Estimated 100%',
       tone: 'danger',
     };
   }
@@ -80,7 +80,7 @@ export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
       return {
         projectedEndPct: 0,
         paceText: kind === '5h' ? '0.0%/h' : '0.0%/d',
-        estPctText: 'Est. 0%',
+        estPctText: 'Estimated 0%',
         tone: 'ok',
       };
     }
@@ -96,7 +96,7 @@ export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
     return {
       projectedEndPct: 0,
       paceText: kind === '5h' ? '0.0%/h' : '0.0%/d',
-      estPctText: 'Est. 0%',
+      estPctText: 'Estimated 0%',
       tone: 'ok',
     };
   }
@@ -104,7 +104,7 @@ export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
     return {
       projectedEndPct: null,
       paceText: 'Cycle just started',
-      estPctText: 'Est. --%',
+      estPctText: 'Estimated --%',
       tone: 'muted',
     };
   }
@@ -114,7 +114,7 @@ export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
   const paceRate = +(ratePerMs * unitMs).toFixed(1);
   const paceText = `${paceRate}%/${spec.rateUnit}`;
   const projectedEndPct = Math.round(win.usedPct * (spec.totalMs / elapsedMs));
-  const estPctText = `Est. ${Math.min(999, projectedEndPct)}%`;
+  const estPctText = `Estimated ${Math.min(999, projectedEndPct)}%`;
 
   let tone = 'ok';
   if (projectedEndPct >= 130) {

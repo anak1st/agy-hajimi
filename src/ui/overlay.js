@@ -17,12 +17,14 @@ function bootstrapOverlay() {
 
   // 若已有旧实例，继承状态后安全卸载（支持前端模块热更新）
   let carryOpen = false;
+  let carryTab = 'overview';
   let carryTelemetry = null;
   let carryQuotaPools = [];
   try {
     const prev = window.__agCtxHudOverlay;
     if (prev) {
       carryOpen = Boolean(prev.isOpen?.());
+      carryTab = prev.getActiveTab?.() || 'overview';
       carryTelemetry = prev.getTelemetry?.() || null;
       carryQuotaPools = prev.getQuotaPools?.() || [];
       prev.dispose?.();
@@ -61,6 +63,7 @@ function bootstrapOverlay() {
   const views = createHudViews({
     initialTelemetry: carryTelemetry,
     initialQuotaPools: carryQuotaPools,
+    initialTab: carryTab,
     onTogglePopover: (next) => {
       views.setPopoverOpen(next);
       if (next && !views.getLastTelemetry()) {
@@ -102,6 +105,7 @@ function bootstrapOverlay() {
     bundleVersion,
     ensureAlive: () => dock.ensureDocked(),
     isOpen: views.isOpen,
+    getActiveTab: views.getActiveTab,
     getTelemetry: views.getLastTelemetry,
     getQuotaPools: views.getLastQuotaPools,
     dispose: () => {

@@ -79,6 +79,7 @@ export function buildTelemetrySnapshot({
   trajectoryRes = null,
   userStatusRes = null,
   quotaRes = null,
+  economics = null,
   selectedCascadeId = '',
   hostRouteCascadeId = '',
   endpointLabel = 'Local',
@@ -271,5 +272,6 @@ export function buildTelemetrySnapshot({
       totalTokens: totalInputTokens + totalCacheReadTokens + totalOutputTokens,
     },
     quotas: normalizeQuotas(quotaRes, userStatusRes),
+    economics,
   };
 }

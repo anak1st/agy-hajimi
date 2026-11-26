@@ -5,7 +5,7 @@
  * `ANTIGRAVITY_CSRF_TOKEN`）定位本地桌面端语言服务，并支持通过 CDP 窗口内转发调通 SSH 远端会话。
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import { homedir } from 'node:os';
@@ -25,9 +25,44 @@ function isPidAlive(pid) {
   }
 }
 
-export function getDaemonDir(homeDir = homedir()) {
+export function getAntigravityDir(homeDir = homedir()) {
   const geminiBase = String(process.env.ANTIGRAVITY_GEMINI_DIR || '').trim() || join(homeDir, '.gemini');
-  return join(geminiBase, 'antigravity', 'daemon');
+  return join(geminiBase, 'antigravity');
+}
+
+export function getDaemonDir(homeDir = homedir()) {
+  return join(getAntigravityDir(homeDir), 'daemon');
+}
+
+/** 扫描本地 conversations 目录下的全量非空对话 UUID，弥补 GetAllCascadeTrajectories 只返回当前窗口索引的缺口 */
+export function discoverLocalConversationIds({ homeDir = homedir(), minCutoffMs = 0, limit = 60 } = {}) {
+  const convDir = join(getAntigravityDir(homeDir), 'conversations');
+  if (!existsSync(convDir)) return [];
+
+  const found = [];
+  let entries = [];
+  try {
+    entries = readdirSync(convDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    const m = ent.name.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db$/i);
+    if (!m) continue;
+    try {
+      const st = statSync(join(convDir, ent.name));
+      if (st.size <= 0) continue;
+      if (minCutoffMs > 0 && st.mtimeMs < minCutoffMs) continue;
+      found.push({ cascadeId: m[1], mtimeMs: st.mtimeMs });
+    } catch {
+      // 忽略并发清理或权限瞬态异常
+    }
+  }
+
+  found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return found.slice(0, limit);
 }
 
 export function discoverLocalHubEndpoints(homeDir = homedir()) {
@@ -251,7 +286,7 @@ export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null, no
   async function getQuotaSummary({ remoteTarget = null } = {}) {
     const now = nowFn();
     const scopeKey = getScopeKey(remoteTarget);
-    const prev = quotaStateByScope.get(scopeKey) || { lastAttemptTs: 0, data: null };
+    const prev = quotaStateByScope.get(scopeKey) || { lastAttemptTs: 0, fetchedAtMs: 0, data: null };
 
     // 固定 10 分钟内直接返回已缓存的配额（不受切会话、生成中或手动强制刷新等外部条件影响）
     if (prev.lastAttemptTs > 0 && now - prev.lastAttemptTs < QUOTA_CACHE_TTL_MS && prev.data) {
@@ -261,22 +296,27 @@ export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null, no
     try {
       const data = await callRpc('RetrieveUserQuotaSummary', { forceRefresh: false }, { timeoutMs: 5000, remoteTarget });
       if (hasQuotaGroups(data)) {
-        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data });
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, fetchedAtMs: now, data });
         return data;
       }
       if (prev.data) {
-        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: prev.data });
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, fetchedAtMs: prev.fetchedAtMs || now, data: prev.data });
         return prev.data;
       }
-      quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: null });
+      quotaStateByScope.set(scopeKey, { lastAttemptTs: now, fetchedAtMs: 0, data: null });
       return data;
     } catch (err) {
       if (prev.data) {
-        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, data: prev.data });
+        quotaStateByScope.set(scopeKey, { lastAttemptTs: now, fetchedAtMs: prev.fetchedAtMs || now, data: prev.data });
         return prev.data;
       }
       throw err;
     }
+  }
+
+  function getLastQuotaFetchedAt(remoteTarget = null) {
+    const scopeKey = getScopeKey(remoteTarget);
+    return quotaStateByScope.get(scopeKey)?.fetchedAtMs || 0;
   }
 
   function getLocalHubPorts() {
@@ -294,8 +334,10 @@ export function createLsClient({ homeDir = homedir(), remoteWindowRpc = null, no
   return {
     resolveLocalEndpoint,
     getLocalHubPorts,
+    discoverLocalConversationIds: (opts) => discoverLocalConversationIds({ homeDir, ...opts }),
     callRpc,
     getUserStatus,
     getQuotaSummary,
+    getLastQuotaFetchedAt,
   };
 }

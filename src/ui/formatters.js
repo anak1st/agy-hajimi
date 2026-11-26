@@ -34,6 +34,21 @@ export function formatTokens(n) {
   return String(Math.round(n));
 }
 
+/** 格式化美元金额（如 `$13.94`、`$0.075`、`<$0.01`） */
+export function formatUsd(n, decimals = 2) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '--';
+  if (n > 0 && n < 0.005 && decimals <= 2) return '<$0.01';
+  if (n >= 1000) return `$${Math.round(n).toLocaleString('en-US')}`;
+  return `$${n.toFixed(decimals)}`;
+}
+
+/** 格式化每百万 Token 美元单价 */
+export function formatRateUsd(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '--';
+  if (n > 0 && n < 0.1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+}
+
 /** 格式化时长（秒或分秒） */
 export function formatDuration(sec) {
   if (typeof sec !== 'number' || !Number.isFinite(sec)) return '--';

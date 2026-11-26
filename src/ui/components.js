@@ -2,40 +2,63 @@
  * 顶栏胶囊与悬浮监控卡片 UI 组件与渲染逻辑。
  */
 
-import { formatCountdown, formatDuration, formatTokens, h, SVG_NS } from './formatters.js';
+import { formatCountdown, formatDuration, formatTokens, formatUsd, h, SVG_NS } from './formatters.js';
 
 export const RING_RADIUS = 5.8;
 export const RING_CIRCUMFERENCE = +(2 * Math.PI * RING_RADIUS).toFixed(2);
 
-function renderQuotaRow(labelText, winObj) {
-  const pct = winObj?.remainingPct;
-  const hasPct = typeof pct === 'number' && Number.isFinite(pct);
-  const toneClass = !hasPct ? '' : pct < 20 ? 'tone-danger' : pct < 50 ? 'tone-warn' : 'tone-ok';
+function renderMergedQuotaRow(labelText, winObj, fallbackWinObj = null) {
+  const effectiveWin = winObj || fallbackWinObj;
+  const remPct = effectiveWin?.remainingPct;
+  const hasPct = typeof remPct === 'number' && Number.isFinite(remPct);
+  const toneClass = !hasPct ? '' : remPct < 20 ? 'tone-danger' : remPct < 50 ? 'tone-warn' : 'tone-ok';
   const fill = h('div', { className: `hud-progress-fill ${toneClass}` });
-  fill.style.width = `${hasPct ? Math.max(0, Math.min(100, pct)) : 0}%`;
+  fill.style.width = `${hasPct ? Math.max(0, Math.min(100, remPct)) : 0}%`;
 
-  const proj = winObj?.projection;
+  const proj = winObj?.projection || fallbackWinObj?.projection;
   const toneSuffix = proj?.tone && proj.tone !== 'muted' ? ` tone-${proj.tone}` : '';
+  let rightProjNode = null;
+  if (proj) {
+    const rawEst = String(proj.estPctText || '');
+    const match = rawEst.match(/^(Estimated\s+)(.+)$/);
+    rightProjNode = match
+      ? h('span', { className: 'hud-quota-est' }, [
+          document.createTextNode(match[1]),
+          h('span', { className: `hud-quota-proj${toneSuffix}`, text: match[2] }),
+        ])
+      : h('span', { className: `hud-quota-proj${toneSuffix}`, text: rawEst });
+  }
   const paceEl = proj
     ? h('div', { className: 'hud-quota-pace' }, [
         h('span', { className: 'hud-quota-est', text: proj.paceText }),
-        h('span', {
-          className: `hud-quota-proj${toneSuffix}`,
-          text: proj.estPctText,
-        }),
+        rightProjNode,
       ])
     : null;
+
+  const hasPoolUsd = winObj?.poolUsd !== null && winObj?.poolUsd !== undefined;
+  const hasSpent = winObj?.observedLocalUsd !== null && winObj?.observedLocalUsd !== undefined;
+  const usdRow = h('div', { className: 'hud-quota-pace' }, [
+    h('span', {
+      className: 'hud-quota-est',
+      text: hasSpent ? `Spent: ${formatUsd(winObj.observedLocalUsd)}` : 'Spent: --',
+    }),
+    h('span', {
+      className: 'hud-quota-est',
+      text: hasPoolUsd ? `Total: ${formatUsd(winObj.poolUsd)}` : 'Total: --',
+    }),
+  ]);
 
   return h('div', { className: 'hud-quota-row' }, [
     h('div', { className: 'hud-quota-row-head' }, [
       h('span', { className: 'hud-quota-win', text: labelText }),
       h('span', {
         className: 'hud-quota-meta',
-        text: hasPct ? `${pct.toFixed(1)}% left · ${formatCountdown(winObj.resetTime)}` : 'Unavailable',
+        text: hasPct ? `${remPct.toFixed(1)}% left · ${formatCountdown(effectiveWin.resetTime)}` : 'Unavailable',
       }),
     ]),
     h('div', { className: 'hud-progress-track' }, [fill]),
     paceEl,
+    usdRow,
   ]);
 }
 
@@ -63,12 +86,15 @@ function createRefreshIcon() {
 export function createHudViews({
   initialTelemetry = null,
   initialQuotaPools = [],
+  initialTab = 'overview',
   onTogglePopover,
   onForceRefresh,
   onPositionPopover,
 }) {
   let popoverOpen = false;
+  let activeTab = initialTab === 'quota-math' ? 'quota-math' : 'overview';
   let lastTelemetry = initialTelemetry;
+  let lastValidCalibration = initialTelemetry?.economics?.calibration || null;
   let lastValidQuotaPools = Array.isArray(initialQuotaPools) ? initialQuotaPools : [];
 
   // 1. 顶栏胶囊
@@ -115,8 +141,24 @@ export function createHudViews({
     [ringSvg, capPctEl]
   );
 
-  // 2. 悬浮卡片顶栏
-  const appTitleEl = h('span', { className: 'hud-app-title', text: 'Antigravity Hajimi' });
+  // 2. 悬浮卡片顶栏（无标题，改为双 Tab）
+  const tabOverviewBtn = h('button', {
+    type: 'button',
+    role: 'tab',
+    className: 'hud-tab-btn',
+    text: 'Session',
+    'aria-selected': 'true',
+    onClick: () => setActiveTab('overview'),
+  });
+  const tabMathBtn = h('button', {
+    type: 'button',
+    role: 'tab',
+    className: 'hud-tab-btn',
+    text: 'Quotas',
+    'aria-selected': 'false',
+    onClick: () => setActiveTab('quota-math'),
+  });
+  const tabsEl = h('div', { className: 'hud-tabs', role: 'tablist' }, [tabOverviewBtn, tabMathBtn]);
   const sshBadgeEl = h('span', { className: 'hud-ssh-badge', hidden: true, text: 'SSH' });
   const updatedTimeEl = h('span', { className: 'hud-updated-at', text: '--:--:--' });
   const refreshBtn = h(
@@ -203,13 +245,33 @@ export function createHudViews({
     ]),
   ]);
 
-  // 6. Model Quotas（仅 Gemini 系列，跨会话独立缓存）
-  const quotaListEl = h('div', { className: 'hud-quota-list' });
-  const quotaCardEl = h('section', { className: 'hud-card' }, [
+  const overviewBodyEl = h('div', { className: 'hud-body' }, [ctxCardEl, matrixEl, tokensCardEl]);
+
+  // 6. 第二页：Quotas（总美元 + 模型使用明细列表 + Model Quotas）
+  const mathSessTotalUsdEl = h('span', { className: 'hud-ctx-ratio', text: '--' });
+  const mathModelListEl = h('div', { className: 'hud-model-list' });
+
+  const mathSessionCardEl = h('section', { className: 'hud-card' }, [
+    h('div', { className: 'hud-card-head' }, [
+      h('span', { className: 'hud-card-title', text: 'Usage Cost' }),
+      mathSessTotalUsdEl,
+    ]),
+    mathModelListEl,
+  ]);
+
+  const mathCalibStatusEl = h('span', { className: 'hud-card-aside', text: '--' });
+  const mathPoolsEl = h('div', { className: 'hud-quota-list' });
+  const mathCalibCardEl = h('section', { className: 'hud-card' }, [
     h('div', { className: 'hud-card-head' }, [
       h('span', { className: 'hud-card-title', text: 'Model Quotas' }),
+      mathCalibStatusEl,
     ]),
-    quotaListEl,
+    mathPoolsEl,
+  ]);
+
+  const mathBodyEl = h('div', { className: 'hud-body', hidden: true }, [
+    mathSessionCardEl,
+    mathCalibCardEl,
   ]);
 
   const popoverEl = h(
@@ -222,31 +284,92 @@ export function createHudViews({
     },
     [
       h('header', { className: 'hud-topbar' }, [
-        appTitleEl,
+        tabsEl,
         h('div', { className: 'hud-header-right' }, [sshBadgeEl, updatedTimeEl, refreshBtn]),
       ]),
-      h('div', { className: 'hud-body' }, [ctxCardEl, matrixEl, tokensCardEl, quotaCardEl]),
+      overviewBodyEl,
+      mathBodyEl,
     ]
   );
 
-  function renderQuotaSection(pools, emptyText) {
-    if (!Array.isArray(pools) || pools.length === 0) {
-      quotaListEl.replaceChildren(h('div', { className: 'hud-empty', text: emptyText }));
+  function syncTabUi() {
+    const isMath = activeTab === 'quota-math';
+    tabOverviewBtn.classList.toggle('is-active', !isMath);
+    tabOverviewBtn.setAttribute('aria-selected', !isMath ? 'true' : 'false');
+    tabMathBtn.classList.toggle('is-active', isMath);
+    tabMathBtn.setAttribute('aria-selected', isMath ? 'true' : 'false');
+    overviewBodyEl.hidden = isMath;
+    mathBodyEl.hidden = !isMath;
+  }
+
+  function setActiveTab(nextTab) {
+    activeTab = nextTab === 'quota-math' ? 'quota-math' : 'overview';
+    syncTabUi();
+    if (popoverOpen) {
+      renderTelemetry(lastTelemetry);
+      onPositionPopover();
+      requestAnimationFrame(() => onPositionPopover());
+    }
+  }
+  syncTabUi();
+
+  function renderQuotaMathPools(cal, fallbackPools, emptyText) {
+    const fbPool = Array.isArray(fallbackPools) && fallbackPools.length > 0 ? fallbackPools[0] : null;
+    const fiveHourWin = cal?.fiveHour || null;
+    const weeklyWin = cal?.weekly || null;
+    const fbFiveHour = fbPool?.fiveHour || null;
+    const fbWeekly = fbPool?.weekly || null;
+
+    if (!fiveHourWin && !weeklyWin && !fbFiveHour && !fbWeekly) {
+      mathCalibStatusEl.textContent = emptyText === 'Loading' ? '--' : 'Unavailable';
+      mathPoolsEl.replaceChildren(h('div', { className: 'hud-empty', text: emptyText }));
       return;
     }
-    quotaListEl.replaceChildren(
-      ...pools.map((pool) => {
-        const rows = [];
-        if (pool.fiveHour) rows.push(renderQuotaRow('5-Hour Limit', pool.fiveHour));
-        if (pool.weekly) rows.push(renderQuotaRow('Weekly Limit', pool.weekly));
-        return h('div', { className: 'hud-quota-pool' }, rows);
-      })
-    );
+    mathCalibStatusEl.textContent = cal?.groupName || fbPool?.name || 'Quota';
+    const poolRows = [];
+    if (fiveHourWin || fbFiveHour) poolRows.push(renderMergedQuotaRow('5-Hour Limit', fiveHourWin, fbFiveHour));
+    if (weeklyWin || fbWeekly) poolRows.push(renderMergedQuotaRow('Weekly Limit', weeklyWin, fbWeekly));
+    mathPoolsEl.replaceChildren(...poolRows);
+  }
+
+  function renderQuotaMathSection(economics, fallbackPools, emptyText) {
+    const sess = economics?.session || null;
+    const cal = economics?.calibration || lastValidCalibration;
+
+    if (!sess) {
+      mathSessTotalUsdEl.textContent = '--';
+      mathModelListEl.replaceChildren(h('div', { className: 'hud-empty', text: emptyText || 'Loading' }));
+      renderQuotaMathPools(lastValidCalibration, fallbackPools, emptyText || 'Loading');
+      return;
+    }
+
+    mathSessTotalUsdEl.textContent = sess.pricedCalls > 0 ? formatUsd(sess.totalUsd) : '--';
+    const models = Array.isArray(sess.models) ? sess.models : [];
+    if (models.length === 0) {
+      mathModelListEl.replaceChildren(h('div', { className: 'hud-model-empty', text: 'No model usage yet' }));
+    } else {
+      mathModelListEl.replaceChildren(
+        ...models.map((m) =>
+          h('div', { className: 'hud-model-row' }, [
+            h('span', { className: 'hud-model-name', text: m.label }),
+            h('span', {
+              className: 'hud-model-stats',
+              text: `${m.priced ? formatUsd(m.usd) : '--'} · ${formatTokens(m.tokens)}`,
+            }),
+          ])
+        )
+      );
+    }
+
+    renderQuotaMathPools(cal, fallbackPools, 'Quota data unavailable');
   }
 
   function renderTelemetry(data, errMsg = '') {
     if (data !== null) {
       lastTelemetry = data;
+      if (data?.economics?.calibration && (data.economics.calibration.fiveHour || data.economics.calibration.weekly)) {
+        lastValidCalibration = data.economics.calibration;
+      }
       const rawPools = Array.isArray(data?.quotas?.pools) ? data.quotas.pools : [];
       const freshPools = rawPools.filter((p) => /gemini/i.test(String(p?.name || '')));
       if (freshPools.length > 0) {
@@ -283,7 +406,7 @@ export function createHudViews({
         tokInputVal.textContent = '--';
         tokCacheVal.textContent = '--';
         tokOutputVal.textContent = '--';
-        renderQuotaSection(lastValidQuotaPools, errMsg ? `Disconnected: ${errMsg}` : 'Loading');
+        renderQuotaMathSection(null, lastValidQuotaPools, errMsg ? `Disconnected: ${errMsg}` : 'Loading');
         updatedTimeEl.textContent = '--:--:--';
       }
       return;
@@ -350,7 +473,7 @@ export function createHudViews({
 
     const rawPools = Array.isArray(d?.quotas?.pools) ? d.quotas.pools : [];
     const freshPools = rawPools.filter((p) => /gemini/i.test(String(p?.name || '')));
-    renderQuotaSection(freshPools.length > 0 ? freshPools : lastValidQuotaPools, 'Quota data unavailable');
+    renderQuotaMathSection(d.economics || null, freshPools.length > 0 ? freshPools : lastValidQuotaPools, 'Quota data unavailable');
 
     updatedTimeEl.textContent = new Date(d.timestampMs || Date.now()).toLocaleTimeString('en-US', { hour12: false });
   }
@@ -372,6 +495,8 @@ export function createHudViews({
     popoverEl,
     isOpen: () => popoverOpen,
     setPopoverOpen,
+    getActiveTab: () => activeTab,
+    setActiveTab,
     renderTelemetry,
     getLastTelemetry: () => lastTelemetry,
     getLastQuotaPools: () => lastValidQuotaPools,
