@@ -14,6 +14,18 @@ function renderQuotaRow(labelText, winObj) {
   const fill = h('div', { className: `hud-progress-fill ${toneClass}` });
   fill.style.width = `${hasPct ? Math.max(0, Math.min(100, pct)) : 0}%`;
 
+  const proj = winObj?.projection;
+  const toneSuffix = proj?.tone && proj.tone !== 'muted' ? ` tone-${proj.tone}` : '';
+  const paceEl = proj
+    ? h('div', { className: 'hud-quota-pace' }, [
+        h('span', { className: 'hud-quota-est', text: proj.paceText }),
+        h('span', {
+          className: `hud-quota-proj${toneSuffix}`,
+          text: proj.estPctText,
+        }),
+      ])
+    : null;
+
   return h('div', { className: 'hud-quota-row' }, [
     h('div', { className: 'hud-quota-row-head' }, [
       h('span', { className: 'hud-quota-win', text: labelText }),
@@ -23,6 +35,7 @@ function renderQuotaRow(labelText, winObj) {
       }),
     ]),
     h('div', { className: 'hud-progress-track' }, [fill]),
+    paceEl,
   ]);
 }
 

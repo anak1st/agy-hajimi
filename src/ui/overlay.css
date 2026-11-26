@@ -525,6 +525,41 @@
   font-family: var(--font-mono);
 }
 
+.hud-quota-pace {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.35;
+}
+
+.hud-quota-est {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.hud-quota-proj {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.hud-quota-proj.tone-ok {
+  color: var(--metric-ok);
+}
+
+.hud-quota-proj.tone-warn {
+  color: var(--metric-warn);
+}
+
+.hud-quota-proj.tone-danger {
+  color: var(--metric-danger);
+}
+
 .hud-empty {
   padding: 16px 12px;
   text-align: center;

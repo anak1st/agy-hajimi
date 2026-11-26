@@ -11,6 +11,7 @@ import vm from 'node:vm';
 import { handleMcpMessage } from '../src/server/mcp-entry.mjs';
 import { isAntigravityAppTarget, parseDevToolsPort } from '../src/server/cdp-targets.mjs';
 import { createLsClient } from '../src/server/ls-client.mjs';
+import { analyzeQuotaWindow } from '../src/server/quota.mjs';
 import { assembleUiBundle } from '../src/server/ui-loader.mjs';
 import { formatDuration, formatTokens } from '../src/ui/formatters.js';
 import {
@@ -251,4 +252,29 @@ test('LS client enforces 10-minute fixed quota cadence and preserves last valid 
   const afterEmpty = await ls.getQuotaSummary({ remoteTarget: target });
   assert.equal(afterEmpty.response.groups[0].buckets[0].remainingFraction, 0.85);
   assert.equal(callNum, 3);
+});
+
+test('Quota pace analyzer projects cycle-end percentage and semantic tone', () => {
+  const now = Date.parse('2026-11-26T05:00:00Z');
+  // 5 小时周期已过去 2.5 小时，消耗 25% -> 速率 10%/h，预计周期末 50%
+  const lowPace = analyzeQuotaWindow(
+    { usedPct: 25, remainingPct: 75, resetTime: '2026-11-26T07:30:00Z' },
+    '5h',
+    now
+  );
+  assert.equal(lowPace.projectedEndPct, 50);
+  assert.equal(lowPace.paceText, '10%/h');
+  assert.equal(lowPace.estPctText, 'Est. 50%');
+  assert.equal(lowPace.tone, 'ok');
+
+  // 5 小时周期已过去 2 小时，消耗 60% -> 速率 30%/h，预计 150%
+  const highPace = analyzeQuotaWindow(
+    { usedPct: 60, remainingPct: 40, resetTime: '2026-11-26T08:00:00Z' },
+    '5h',
+    now
+  );
+  assert.equal(highPace.projectedEndPct, 150);
+  assert.equal(highPace.paceText, '30%/h');
+  assert.equal(highPace.estPctText, 'Est. 150%');
+  assert.equal(highPace.tone, 'danger');
 });

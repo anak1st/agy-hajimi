@@ -56,11 +56,85 @@ export function normalizeQuotaWindow(bucket, nowMs = Date.now()) {
   };
 }
 
+const QUOTA_WINDOW_SPECS = {
+  '5h': { totalMs: 5 * 3600_000, warmupMs: 3 * 60_000, rateUnit: 'h' },
+  weekly: { totalMs: 7 * 24 * 3600_000, warmupMs: 15 * 60_000, rateUnit: 'd' },
+};
+
+/** 根据当前周期已消耗比例与剩余重置时间，预测周期末预计消耗百分比 */
+export function analyzeQuotaWindow(win, kind, nowMs = Date.now()) {
+  if (!win || typeof win.usedPct !== 'number' || typeof win.remainingPct !== 'number') return null;
+  const spec = QUOTA_WINDOW_SPECS[kind];
+  if (!spec) return null;
+
+  if (win.remainingPct <= 0) {
+    return {
+      projectedEndPct: 100,
+      paceText: 'Limit reached',
+      estPctText: 'Est. 100%',
+      tone: 'danger',
+    };
+  }
+  if (!win.resetTime) {
+    if (win.usedPct <= 0) {
+      return {
+        projectedEndPct: 0,
+        paceText: kind === '5h' ? '0.0%/h' : '0.0%/d',
+        estPctText: 'Est. 0%',
+        tone: 'ok',
+      };
+    }
+    return null;
+  }
+
+  const resetMs = Date.parse(win.resetTime);
+  if (!Number.isFinite(resetMs)) return null;
+  const remainingMs = Math.max(0, Math.min(spec.totalMs, resetMs - nowMs));
+  const elapsedMs = spec.totalMs - remainingMs;
+
+  if (win.usedPct <= 0) {
+    return {
+      projectedEndPct: 0,
+      paceText: kind === '5h' ? '0.0%/h' : '0.0%/d',
+      estPctText: 'Est. 0%',
+      tone: 'ok',
+    };
+  }
+  if (elapsedMs < spec.warmupMs) {
+    return {
+      projectedEndPct: null,
+      paceText: 'Cycle just started',
+      estPctText: 'Est. --%',
+      tone: 'muted',
+    };
+  }
+
+  const ratePerMs = win.usedPct / elapsedMs;
+  const unitMs = spec.rateUnit === 'd' ? 24 * 3600_000 : 3600_000;
+  const paceRate = +(ratePerMs * unitMs).toFixed(1);
+  const paceText = `${paceRate}%/${spec.rateUnit}`;
+  const projectedEndPct = Math.round(win.usedPct * (spec.totalMs / elapsedMs));
+  const estPctText = `Est. ${Math.min(999, projectedEndPct)}%`;
+
+  let tone = 'ok';
+  if (projectedEndPct >= 130) {
+    tone = 'danger';
+  } else if (projectedEndPct > 100) {
+    tone = 'warn';
+  }
+
+  return {
+    projectedEndPct,
+    paceText,
+    estPctText,
+    tone,
+  };
+}
+
 /** 解析并仅保留 Gemini 系列模型的配额池 */
-export function normalizeQuotas(quotaRes, userStatusRes) {
+export function normalizeQuotas(quotaRes, userStatusRes, nowMs = Date.now()) {
   const payload = quotaRes?.response !== undefined ? quotaRes.response : quotaRes;
   const rawGroups = Array.isArray(payload?.groups) ? payload.groups : [];
-  const nowMs = Date.now();
   const pools = [];
 
   for (const grp of rawGroups) {
@@ -86,6 +160,9 @@ export function normalizeQuotas(quotaRes, userStatusRes) {
         weekly = norm;
       }
     }
+
+    if (fiveHour) fiveHour.projection = analyzeQuotaWindow(fiveHour, '5h', nowMs);
+    if (weekly) weekly.projection = analyzeQuotaWindow(weekly, 'weekly', nowMs);
 
     if (fiveHour || weekly) {
       pools.push({
