@@ -416,7 +416,87 @@
   );
   portalShadow.appendChild(popoverEl);
 
-  // --- 7. 顶栏停靠与浮层防溢出定位（基于右上角按钮组真实包围盒留出明确间距） ---
+  // --- 7. 顶栏停靠与浮层防溢出定位（优先随宿主顶栏流式停靠，绝不悬浮遮挡侧栏） ---
+  function findButtonContainerInGroup(group) {
+    if (!group) return null;
+    const isVisibleBtn = (el) => {
+      if (!el || capsuleHost.contains(el)) return false;
+      if (!el.matches?.('button, a, [role="button"]')) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+    const directBtns = Array.from(group.children || []).filter(isVisibleBtn);
+    if (directBtns.length > 0) return group;
+
+    // 若 div.shrink-0 内部还有一层按钮 flex 容器，优先挂载进该直接承载按钮的容器
+    for (const child of Array.from(group.children || [])) {
+      if (child === capsuleHost || child.matches?.('button, a, [role="button"]')) continue;
+      const nestedBtns = Array.from(child.children || []).filter(isVisibleBtn);
+      if (nestedBtns.length > 0) return child;
+    }
+    return group;
+  }
+
+  function findDockTarget() {
+    const titlebar = document.querySelector('[class*="@container/titlebar"]');
+    if (titlebar) {
+      const tbRect = titlebar.getBoundingClientRect();
+      if (tbRect.width > 0 && tbRect.height > 0) {
+        const rightGroup = titlebar.querySelector(':scope > div.shrink-0') || titlebar.lastElementChild;
+        if (rightGroup && rightGroup !== titlebar.firstElementChild) {
+          return { kind: 'flow', container: findButtonContainerInGroup(rightGroup) };
+        }
+        return { kind: 'flow', container: titlebar };
+      }
+    }
+    return null;
+  }
+
+  function syncFlowButtonMetrics(container) {
+    const siblingBtns = [];
+    for (const child of Array.from(container.children || [])) {
+      if (child === capsuleHost) continue;
+      const r = child.getBoundingClientRect();
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      const st = getComputedStyle(child);
+      if (st.display === 'none' || st.visibility === 'hidden') continue;
+      siblingBtns.push({
+        left: r.left,
+        right: r.right,
+        height: r.height,
+        marginLeft: parseFloat(st.marginLeft || '0') || 0,
+      });
+    }
+
+    let btnHeight = 28;
+    if (siblingBtns.length > 0) {
+      const heights = siblingBtns.map((b) => Math.round(b.height)).filter((h) => h >= 20 && h <= 36);
+      if (heights.length > 0) btnHeight = Math.max(24, Math.min(34, heights[0]));
+    }
+    capsuleHost.style.height = `${btnHeight}px`;
+    capsuleBtn.style.height = `${btnHeight}px`;
+
+    const cStyle = getComputedStyle(container);
+    const isFlex = cStyle.display.includes('flex');
+    const colGap = parseFloat(cStyle.columnGap || '0');
+    const firstSiblingMarginLeft = siblingBtns[0]?.marginLeft || 0;
+    if ((isFlex && Number.isFinite(colGap) && colGap >= 2) || firstSiblingMarginLeft >= 2) {
+      // 父级容器已有 flex gap 或 space-x-* 间距，直接继承与原生按钮一致的外间距
+      capsuleHost.style.marginRight = '0px';
+    } else {
+      let measuredGap = 6;
+      if (siblingBtns.length >= 2) {
+        siblingBtns.sort((a, b) => a.left - b.left);
+        const g = Math.round(siblingBtns[1].left - siblingBtns[0].right);
+        if (g >= 2 && g <= 24) measuredGap = g;
+      }
+      capsuleHost.style.marginRight = `${measuredGap}px`;
+    }
+    capsuleHost.style.marginLeft = '0px';
+    capsuleHost.style.top = '';
+    capsuleHost.style.right = '';
+  }
+
   function measureTopRightCluster(vw) {
     const boxes = [];
     const seen = new Set();
@@ -439,7 +519,6 @@
     if (boxes.length === 0) return null;
     boxes.sort((a, b) => b.right - a.right);
 
-    // 从最右侧可见按钮向左合并连续按钮组（间距 <= 56px 视为同一组，跨过中间拖拽留白即停止）
     let clusterLeft = boxes[0].left;
     const anchorTop = boxes[0].top;
     const anchorHeight = boxes[0].height;
@@ -461,6 +540,7 @@
   }
 
   function updateFixedPosition() {
+    if (capsuleHost.getAttribute('data-dock') !== 'fixed') return;
     const vw = Number(window.innerWidth || 1280);
     const cluster = measureTopRightCluster(vw);
     let topOffset = 8;
@@ -471,6 +551,8 @@
       topOffset = Math.max(2, Math.round(cluster.anchorTop + (cluster.anchorHeight - btnHeight) / 2));
       rightOffset = Math.max(12, Math.ceil(vw - cluster.clusterLeft + cluster.clusterGap));
     }
+    capsuleHost.style.marginRight = '';
+    capsuleHost.style.marginLeft = '';
     capsuleHost.style.top = `${topOffset}px`;
     capsuleHost.style.right = `${rightOffset}px`;
     capsuleHost.style.height = `${btnHeight}px`;
@@ -492,14 +574,29 @@
       setPopoverOpen(false);
     }
 
-    if (capsuleHost.parentElement !== body) {
-      body.appendChild(capsuleHost);
-    }
-    if (capsuleHost.getAttribute('data-dock') !== 'fixed') {
-      capsuleHost.setAttribute('data-dock', 'fixed');
-    }
-    if (shouldShow) {
-      updateFixedPosition();
+    const dock = findDockTarget();
+    if (dock) {
+      if (capsuleHost.parentElement !== dock.container || dock.container.firstChild !== capsuleHost) {
+        if (dock.container.firstChild) {
+          dock.container.insertBefore(capsuleHost, dock.container.firstChild);
+        } else {
+          dock.container.appendChild(capsuleHost);
+        }
+      }
+      if (capsuleHost.getAttribute('data-dock') !== 'flow') {
+        capsuleHost.setAttribute('data-dock', 'flow');
+      }
+      syncFlowButtonMetrics(dock.container);
+    } else {
+      if (capsuleHost.parentElement !== body) {
+        body.appendChild(capsuleHost);
+      }
+      if (capsuleHost.getAttribute('data-dock') !== 'fixed') {
+        capsuleHost.setAttribute('data-dock', 'fixed');
+      }
+      if (shouldShow) {
+        updateFixedPosition();
+      }
     }
     if (popoverOpen) positionPopover();
     return Boolean(capsuleHost.isConnected && portalHost.isConnected);

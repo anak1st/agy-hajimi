@@ -46,9 +46,6 @@
 
 /* --- 1. 顶栏胶囊宿主 (#ag-ctx-hud-capsule) --- */
 :host(.hud-capsule-host) {
-  position: fixed;
-  top: 8px;
-  right: 18px;
   display: inline-flex;
   align-items: center;
   height: 28px;
@@ -62,6 +59,16 @@
 
 :host(.hud-capsule-host[hidden]) {
   display: none !important;
+}
+
+:host(.hud-capsule-host[data-dock="flow"]) {
+  position: relative;
+}
+
+:host(.hud-capsule-host[data-dock="fixed"]) {
+  position: fixed;
+  top: 8px;
+  right: 18px;
 }
 
 .hud-capsule-btn {
